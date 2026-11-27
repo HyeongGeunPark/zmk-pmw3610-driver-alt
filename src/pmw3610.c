@@ -13,9 +13,12 @@
 #include <zmk/keymap.h>
 #include <zmk/events/activity_state_changed.h>
 #include "pmw3610.h"
+#include "pmw3610_xy_pack.h"
 
 #include <zephyr/logging/log.h>
 LOG_MODULE_REGISTER(pmw3610, CONFIG_PMW3610_ALT_LOG_LEVEL);
+
+BUILD_ASSERT(PMW3610_XY_PACKED_CODE == INPUT_REL_MISC);
 
 //////// Sensor initialization steps definition //////////
 // init is done in non-blocking manner (i.e., async), a //
@@ -495,11 +498,17 @@ static int pmw3610_report_data(const struct device *dev) {
 #endif
         data->dx = 0;
         data->dy = 0;
-        if (have_x) {
-            input_report(dev, config->evt_type, config->x_input_code, rx, !have_y, K_NO_WAIT);
-        }
-        if (have_y) {
-            input_report(dev, config->evt_type, config->y_input_code, ry, true, K_NO_WAIT);
+        if (config->packed_xy && have_x && have_y) {
+            // both axes moved: one event instead of two, see pmw3610_xy_pack.h
+            input_report(dev, config->evt_type, PMW3610_XY_PACKED_CODE,
+                         pmw3610_xy_pack(rx, ry), true, K_NO_WAIT);
+        } else {
+            if (have_x) {
+                input_report(dev, config->evt_type, config->x_input_code, rx, !have_y, K_NO_WAIT);
+            }
+            if (have_y) {
+                input_report(dev, config->evt_type, config->y_input_code, ry, true, K_NO_WAIT);
+            }
         }
     }
 
@@ -668,6 +677,8 @@ static const struct sensor_driver_api pmw3610_driver_api = {
                         SPI_MODE_CPHA | SPI_TRANSFER_MSB)
 
 #define PMW3610_DEFINE(n)                                                                          \
+    BUILD_ASSERT(!DT_INST_PROP(n, packed_xy) || DT_INST_PROP(n, evt_type) == INPUT_EV_REL,         \
+                 "packed-xy needs evt-type = <INPUT_EV_REL>");                                     \
     static struct pixart_data data##n;                                                             \
     static const struct pixart_config config##n = {                                                \
 		.spi = SPI_DT_SPEC_INST_GET(n, PMW3610_SPI_MODE, 0),		                               \
@@ -681,6 +692,7 @@ static const struct sensor_driver_api pmw3610_driver_api = {
         .y_input_code = DT_PROP(DT_DRV_INST(n), y_input_code),                                     \
         .force_awake = DT_PROP(DT_DRV_INST(n), force_awake),                                       \
         .force_awake_4ms_mode = DT_PROP(DT_DRV_INST(n), force_awake_4ms_mode),                     \
+        .packed_xy = DT_PROP(DT_DRV_INST(n), packed_xy),                                           \
     };                                                                                             \
     DEVICE_DT_INST_DEFINE(n, pmw3610_init, NULL, &data##n, &config##n, POST_KERNEL,                \
                           CONFIG_INPUT_PMW3610_INIT_PRIORITY, &pmw3610_driver_api);

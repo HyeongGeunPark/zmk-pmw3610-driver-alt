@@ -32,3 +32,10 @@ properties:
     type: boolean
   force-awake-4ms-mode:
     type: boolean
+  packed-xy:
+    type: boolean
+    description: |
+      Report a frame that moved on both axes as one packed event instead of
+      an X event and a Y event, which halves the notifications such a frame
+      costs over a split. Needs evt-type = <INPUT_EV_REL>, and a
+      pixart,pmw3610-alt-xy-unpack node on the side that receives the events.

@@ -1,0 +1,23 @@
+description: |
+  Receiving side of the `packed-xy` property of pixart,pmw3610-alt.
+
+  Listens to another input device, turns each packed X/Y event back into an
+  X event and a Y event, and passes every other event on unchanged. On a ZMK
+  split central, set `device` to the zmk,input-split proxy of the sensor and
+  point the zmk,input-listener at this node instead of at the proxy.
+
+compatible: "pixart,pmw3610-alt-xy-unpack"
+
+properties:
+  device:
+    type: phandle
+    required: true
+    description: Input device whose events are unpacked and re-emitted.
+  x-input-code:
+    type: int
+    default: 0
+    description: Code of the X event to emit. Defaults to INPUT_REL_X.
+  y-input-code:
+    type: int
+    default: 1
+    description: Code of the Y event to emit. Defaults to INPUT_REL_Y.

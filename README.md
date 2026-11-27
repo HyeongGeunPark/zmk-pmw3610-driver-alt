@@ -132,6 +132,42 @@ CONFIG_PMW3610_ALT=y
 # CONFIG_PMW3610_ALT_INIT_POWER_UP_EXTRA_DELAY_MS=300 // <--see Troubleshooting
 ```
 
+## Packed X/Y over a split
+
+By default a frame that moved on both axes is reported as an X event and a Y event. Over a ZMK split each input event is sent as its own notification, so such a frame costs two, and rolling the ball diagonally or in circles produces about 250 notifications per second. With `packed-xy` the driver reports that frame as one event, which halves the radio time the sensor takes. The report rate does not change. Frames that moved on one axis are reported as before.
+
+The packed event is a relative event with code `INPUT_REL_MISC`; its 32-bit value holds X in the upper and Y in the lower 16 bits. Only the unpack device below understands it, so the central has to route the sensor's events through one. `packed-xy` needs `evt-type = <INPUT_EV_REL>`.
+
+On the peripheral that has the sensor:
+
+```dts
+    trackball: trackball@0 {
+        compatible = "pixart,pmw3610-alt";
+        /* ... */
+        packed-xy;
+    };
+```
+
+On the central, between the `zmk,input-split` proxy and the listener:
+
+```dts
+/ {
+    trackball_xy: trackball_xy {
+        compatible = "pixart,pmw3610-alt-xy-unpack";
+        device = <&trackball_split>;
+    };
+
+    trackball_listener {
+        compatible = "zmk,input-listener";
+        device = <&trackball_xy>;
+    };
+};
+```
+
+The unpack device passes events that are not packed through unchanged, so a central with the unpack device works with a peripheral that does not pack. The other way round does not: flash the central first.
+
+`tests/test_xy_pack.c` checks the packing on a host: `clang -Wall -Wextra -Werror -I../src test_xy_pack.c -o test_xy_pack`.
+
 ## Troubleshooting
 
 If you are getting `Incorrect product id 0xFF (expecting 0x3E)!` on `nice_nano_v2` board from the log, you'd want to apply `CONFIG_PMW3610_ALT_INIT_POWER_UP_EXTRA_DELAY_MS=1000` in your shield .conf/.overlay file. Due to this driver doesn't offer module dependancy setting, that would ensure external power (to enable VCC pin on board) is ready, the `CONFIG_PMW3610_ALT_INIT_POWER_UP_EXTRA_DELAY_MS` would use to add extra one second delay of power up.

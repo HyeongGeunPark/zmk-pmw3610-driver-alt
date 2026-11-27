@@ -99,3 +99,20 @@ module-str = PMW3610_ALT
 source "${ZEPHYR_BASE}/subsys/logging/Kconfig.template.log_config"
 
 endif #PMW3610_ALT
+
+# Receiving side of the packed-xy property. Built wherever the devicetree has
+# the node, which on a split is the central, where the sensor driver is off.
+config PMW3610_ALT_XY_UNPACK
+  bool "Turn packed X/Y events of PMW3610 back into X and Y events"
+  default y
+  depends on INPUT
+  depends on DT_HAS_PIXART_PMW3610_ALT_XY_UNPACK_ENABLED
+
+if PMW3610_ALT_XY_UNPACK
+
+# Same priority as the device it listens to, so devicetree order puts it after.
+config PMW3610_ALT_XY_UNPACK_INIT_PRIORITY
+    int "PMW3610 XY unpack device initialization priority"
+    default INPUT_INIT_PRIORITY
+
+endif #PMW3610_ALT_XY_UNPACK
