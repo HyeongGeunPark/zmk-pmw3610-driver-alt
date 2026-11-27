@@ -1,5 +1,8 @@
 # PMW3610 driver implementation for ZMK
 
+> [!NOTE]
+> This is a fork of [badjeff/zmk-pmw3610-driver](https://github.com/badjeff/zmk-pmw3610-driver), on top of its `main` at `44b4a76`. It adds one optional feature, `packed-xy`, which sends a frame that moved on both axes over a ZMK split as one notification instead of two: see [Packed X/Y over a split](#packed-xy-over-a-split). Without that property the driver behaves as upstream does. Apart from that section, the comparison with upstream below, and the west manifest in Installation, this README is upstream's text.
+
 This work is based on [ufan's zmk pixart sensor drivers](https://github.com/ufan/zmk/tree/support-trackpad), [inorichi's zmk-pmw3610-driver](https://github.com/inorichi/zmk-pmw3610-driver), and [Zephyr PMW3610 driver](https://github.com/zephyrproject-rtos/zephyr/blob/main/drivers/input/input_pmw3610.c).
 
 This driver had been tested on [my PMW3610 breakout board](https://github.com/badjeff/pmw3610-pcb).
@@ -26,6 +29,15 @@ This driver had been tested on [my PMW3610 breakout board](https://github.com/ba
 - Separates sampling rate from reporting rate — accumulates XY motion data between interrupts and reports at configurable intervals (`CONFIG_PMW3610_ALT_REPORT_INTERVAL_MIN`) to reduce report count for high CPI sensors in noisy RF environments while maintaining lossless cursor tracking.
 - Deprecated reset pin control, relying on software reset via SPI commands.
 
+#### What is different to [badjeff's driver](https://github.com/badjeff/zmk-pmw3610-driver) (this fork)
+- Optional `packed-xy` property, with a matching `pixart,pmw3610-alt-xy-unpack` device for the split central. Upstream already leaves out an axis that did not move. This also covers the frame where both axes moved, which upstream has to report as two events. Input events per frame, each of which is one notification over a ZMK split:
+
+  | Frame moved on | Zephyr driver | Upstream | This fork with `packed-xy` |
+  | --- | --- | --- | --- |
+  | X only | 2 | 1 | 1 |
+  | Y only | 2 | 1 | 1 |
+  | Both axes | 2 | 2 | 1 |
+
 ## Installation
 
 Include this project on ZMK's west manifest in `config/west.yml`:
@@ -35,21 +47,24 @@ manifest:
   remotes:
     ...
     # START #####
-    - name: badjeff
-      url-base: https://github.com/badjeff
+    - name: HyeongGeunPark
+      url-base: https://github.com/HyeongGeunPark
     # END #######
     ...
   projects:
     ...
     # START #####
     - name: zmk-pmw3610-driver
-      remote: badjeff
-      revision: main
+      remote: HyeongGeunPark
+      repo-path: zmk-pmw3610-driver-alt
+      revision: packed-xy
     # END #######
     ...
   self:
     path: config
 ```
+
+The `packed-xy` branch is rebased when upstream `main` moves. Put a commit SHA in `revision` if a build has to stay reproducible.
 
 Update `board.overlay` adding the necessary bits (update the pins for your board accordingly):
 
@@ -134,9 +149,21 @@ CONFIG_PMW3610_ALT=y
 
 ## Packed X/Y over a split
 
-By default a frame that moved on both axes is reported as an X event and a Y event. Over a ZMK split each input event is sent as its own notification, so such a frame costs two, and rolling the ball diagonally or in circles produces about 250 notifications per second. With `packed-xy` the driver reports that frame as one event, which halves the radio time the sensor takes. The report rate does not change. Frames that moved on one axis are reported as before.
+This section is specific to this fork.
 
-The packed event is a relative event with code `INPUT_REL_MISC`; its 32-bit value holds X in the upper and Y in the lower 16 bits. Only the unpack device below understands it, so the central has to route the sensor's events through one. `packed-xy` needs `evt-type = <INPUT_EV_REL>`.
+### Why
+
+ZMK's split sends every input event as its own notification. The sensor's default frame period is about 8 ms, so rolling the ball diagonally or in circles, where every frame moves on both axes, produces up to about 250 notifications per second from the half that has the sensor. That figure is calculated from the frame period, not measured.
+
+A 7.5 ms split connection has 133 connection events per second. We estimate that with ZMK's default buffer counts it carries about two notifications per event, so about 266 per second. This is an estimate from reading Zephyr's controller code, not a measurement. If it holds, there are only a few percent of headroom. When something else takes radio time, such as a second peripheral, a BLE host connected to the central, or retransmissions, the peripheral's send queue fills and stays full, and the pointer trails the ball by a fraction of a second.
+
+### What it does
+
+With `packed-xy` a frame that moved on both axes is reported as one event instead of two, so it costs one notification. That halves the notifications, and the radio time, such frames take. The report rate does not change, and frames that moved on one axis are reported as before.
+
+The packed event is a relative event with code `INPUT_REL_MISC`. Its 32-bit value holds X in the upper and Y in the lower 16 bits; the driver already limits each axis to 16 bits. It is the same size on air as a single-axis event, because the split payload carries a 32-bit value either way.
+
+### Setup
 
 On the peripheral that has the sensor:
 
@@ -164,9 +191,27 @@ On the central, between the `zmk,input-split` proxy and the listener:
 };
 ```
 
-The unpack device passes events that are not packed through unchanged, so a central with the unpack device works with a peripheral that does not pack. The other way round does not: flash the central first.
+The unpack device turns each packed event back into an X event and a Y event, and passes every other event through unchanged. `x-input-code` and `y-input-code` on the unpack node set the codes it emits; they default to `INPUT_REL_X` and `INPUT_REL_Y`.
 
-`tests/test_xy_pack.c` checks the packing on a host: `clang -Wall -Wextra -Werror -I../src test_xy_pack.c -o test_xy_pack`.
+### What it costs
+
+- The packed event is not a standard input event. Only the unpack device understands it. A `zmk,input-listener` that receives one directly ignores it, so the pointer does not move on frames that moved on both axes.
+- Because of that, flash the central first. A central with the unpack device works with a peripheral that does not pack yet; the other way round does not.
+- `packed-xy` needs `evt-type = <INPUT_EV_REL>`. The build fails otherwise.
+- Input processors on the peripheral's `zmk,input-split` node see the packed event, not X and Y. Put processors that work on X and Y on the central's listener, which sits behind the unpack device.
+- If a notification is dropped, both axes of that frame are lost together. Without packing one axis could be lost on its own.
+- The unpack device puts two events into the input queue for each packed event and never waits for room. A burst of more than about half of `CONFIG_INPUT_QUEUE_MAX_MSGS` packed events arriving at once can overflow that queue. Unpacked, the same burst would be the same number of events.
+
+### Testing
+
+`tests/test_xy_pack.c` checks the packing on a host:
+
+```shell
+cd tests
+clang -Wall -Wextra -Werror -I../src test_xy_pack.c -o test_xy_pack && ./test_xy_pack
+```
+
+Tried on hardware: a nice!nano v2 split with a dongle as the central and the sensor on one half, built with ZMK `main` at `4dd95d7`. With a BLE host connected to the central, the pointer used to trail the ball whenever it was rolled in circles. With `packed-xy` that became much rarer. It did not go away completely: the pointer still trails now and then. This is what was seen in use, not a measurement.
 
 ## Troubleshooting
 
